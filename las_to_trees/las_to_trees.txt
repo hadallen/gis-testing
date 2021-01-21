@@ -1,0 +1,123 @@
+
+#######################################################
+#######################################################
+####
+#### Author: Nicholas Hadaller
+#### This script will load a las file and produce the following derivitives
+#### There were errors with the LASfile that I was using for testing purposes
+#### Regardless the script completed and various plots can be viewed 
+####
+####
+####    Warning:    I am not experienced with R and LiDAR LASfile use
+####                use this at your own risk. Loading a very large LASfile
+####                could cause R or your computer to crash
+####
+####  dtm1            - digital terrain model Rasterlayer
+####  las1_norm       - height normalized LASfile
+####  las1_dn         - denoised LASfile
+####  chm1            - Crown Height Model Rasterlayer, filtered
+####  las1_watershed  - LASfile with trees segmented, with all other points(?)
+####  trees1          - LASfile with trees segmented and isolated
+####  hulls1          - SpatialPolygonDataFrame delineating individual tree crowns based on las1_watershed
+####  hulls2          - SpatialPolygonDataFrame delineating individual tree crowns based on trees1
+####  crowns1         - Rasterlayer delineating individual tree crowns based on chm1
+####
+#######################################################
+#######################################################
+####
+####        I cannot take any credit for any of the packages I used 
+####        Use citation("lidR"), citation("raster"), citation("sp") for up-to-date citations
+####        
+####        Most of this was found on the github page for lidR: https://github.com/Jean-Romain/lidR 
+####        Also very useful was the lidR CRAN documentation: https://cran.r-project.org/web/packages/lidR/lidR.pdf    
+####            
+####        Roussel, J.R., Auty, D., Coops, N. C., Tompalski, P., Goodbody, T. R. H., Sánchez Meador, A., Bourdon, J.F., De
+####        Boissieu, F., Achim, A. (2020). lidR : An R package for analysis of Airborne Laser Scanning (ALS) data. Remote
+####        Sensing of Environment, 251 (August), 112061. <doi:10.1016/j.rse.2020.112061>.
+####    
+####        Jean-Romain Roussel and David Auty (2021). Airborne LiDAR Data Manipulation and Visualization for Forestry
+####        Applications. R package version 3.1.0. https://cran.r-project.org/package=lidR
+####
+####        Robert J. Hijmans (2020). raster: Geographic Data Analysis and Modeling. R package version 3.4-5.
+####        https://CRAN.R-project.org/package=raster
+####
+####        Pebesma, E.J., R.S. Bivand, 2005. Classes and methods for spatial data in R. R News 5 (2),
+####        https://cran.r-project.org/doc/Rnews/.
+####
+####        Roger S. Bivand, Edzer Pebesma, Virgilio Gomez-Rubio, 2013. Applied spatial data analysis with R, Second edition.
+####        Springer, NY. https://asdar-book.org/
+####
+####
+#######################################################
+#######################################################
+####Change this value to reflect where your data is####
+
+
+data_location=("data/testjan15/352B2.las") 
+                     # ^^ Change me
+
+#######################################################
+#######################################################
+
+library(lidR)
+
+
+####This is used to filter noise from LAS files
+filter_noise = function(las, sensitivity)
+{
+    p95 <- grid_metrics(las, ~quantile(Z, probs = 0.95), 10)
+    las <- merge_spatial(las, p95, "p95")
+    las <- filter_poi(las, Z < p95*sensitivity)
+    las$p95 <- NULL
+    return(las)
+}
+
+####Load LASfile
+las1 = readLAS(data_location)
+print("LAS file loaded -> las1 LASfile")
+
+####Generate DTM 
+dtm1 <- grid_terrain(las1, algorithm = knnidw(k = 8, p = 2))
+print("DTM Rasterlayer complete -> dtm1 Rasterlayer")
+
+####Normalize the height to the ground
+las1_norm = normalize_height(las1, dtm1)
+print("las1 LASfile normalized -> las1_norm LASfile")
+
+####Denoise LAS file
+las1_dn <- filter_noise(las1_norm, sensitivity = 1.2)
+print("las1_norm LASfile denoised -> las1_dn LASfile")
+
+####CHM Raster creation
+print("chm1 Rasterlayer chm1 being created...")
+chm1 <- grid_canopy(las1_dn, 0.5, pitfree(c(0,2,5,10,15), c(3,1.5), subcircle = 0.2))
+print("chm1 Rasterlayer analysis complete -> chm1 Rasterlayer")
+
+####CHM Raster filtering
+print("chm1 Rasterlayer filtering...")
+ker = matrix(1,5,5)
+chm1 = focal(chm1, w = ker, fun = median)
+print("chm1 Rasterlayer filtered")
+
+####Tree segmentation
+algo <- watershed(chm1, th_tree = 4)
+las1_watershed  <- segment_trees(las1_dn, algo)
+print("las1_dn LASfile segmentation using watershed algorhythm -> las1_watershed LASfile")
+
+####Tree isolation
+trees1 <- filter_poi(las1_watershed, !is.na(treeID))
+print("Trees isolated from las1_watershed LASfile -> trees1 LASfile")
+
+####Crown hulls from las1_watershed to polygon
+hulls1  <- delineate_crowns(las1_watershed, func = .stdmetrics)
+print("Crowns delineated from las1_watershed LASfile -> hulls1 SpatialPolygonsDataFrame")
+
+####Crown hulls from trees1 to polygon
+hulls2  <- delineate_crowns(trees1, func = .stdmetrics)
+print("Crowns delineated from trees1 LASfile > hulls2 SpatialPolygonsDataFrame")
+
+####Crown hulls to raster
+crowns1 = watershed(chm1, th = 4)()
+print("chm1 Rasterlayer segmentation using watershed algorhthym -> crowns1 Rasterlayer")
+
+
